@@ -137,7 +137,34 @@ class CaptioningRNN(object):
         # defined above to store loss and gradients; grads[k] should give the      #
         # gradients for self.params[k].                                            #
         ############################################################################
-        pass
+        # W_proj, b_proj
+        h0 = np.dot(features, W_proj) + b_proj # NxH
+        x, cache_we = word_embedding_forward(captions_in, W_embed) # NxTxW
+        if self.cell_type == 'rnn':
+            h, cache_rnn = rnn_forward(x, h0, Wx, Wh, b) # NxTxH
+        elif self.cell_type == 'lstm':
+            h, cache_lstm = lstm_forward(x, h0, Wx, Wh, b)
+        
+        out, cache_affine = temporal_affine_forward(h, W_vocab, b_vocab) # NxTxV
+        loss, dout = temporal_softmax_loss(out, captions_out, mask)
+        
+        dh, dW_vocab, db_vocab = temporal_affine_backward(dout, cache_affine)
+        
+        if self.cell_type == 'rnn':
+            dx, dh0, dWx, dWh, db = rnn_backward(dh, cache_rnn)
+        elif self.cell_type == 'lstm':
+            dx, dh0, dWx, dWh, db = lstm_backward(dh, cache_lstm)
+        
+        dW_embed = word_embedding_backward(dx, cache_we)
+        
+        grads['W_embed'] = dW_embed
+        grads['W_proj'] = np.dot(features.T, dh0)
+        grads['b_proj'] = np.sum(dh0, axis=0)
+        grads['Wx'] = dWx
+        grads['Wh'] = dWh
+        grads['b'] = db
+        grads['W_vocab'] = dW_vocab
+        grads['b_vocab'] = db_vocab
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -199,7 +226,38 @@ class CaptioningRNN(object):
         # functions; you'll need to call rnn_step_forward or lstm_step_forward in #
         # a loop.                                                                 #
         ###########################################################################
-        pass
+        # Initialize Hidden State
+        h0 = np.dot(features, W_proj) + b_proj
+        
+        # Embed Start Token
+        N, _ = features.shape
+        startTokenArray = np.zeros((N,1))
+        startTokenArray[:,0] = self._start
+        x0, _ = word_embedding_forward(startTokenArray, W_embed)
+        
+        # Forward Step with Start Token
+        if self.cell_type == 'rnn':
+            h, _ = rnn_step_forward(x0[:,0,:], h0, Wx, Wh, b)
+        elif self.cell_type == 'lstm':
+            _, H = h0.shape
+            c0 = np.zeros((N,H))
+            h, c, _ = lstm_step_forward(x0[:,0,:], h0, c0, Wx, Wh, b)
+        
+        # Get Scores
+        out, _ = temporal_affine_forward(h[:,np.newaxis,:], W_vocab, b_vocab)
+        
+        # Extract Indices of the Most Probably Words
+        captions[:,0] = np.squeeze(np.argmax(out, axis=2))
+        
+        for t in range(1,max_length):
+            x, _ = word_embedding_forward(captions[:,t-1][np.newaxis], W_embed)
+            if self.cell_type == 'rnn':
+                h, _ = rnn_step_forward(x[:,0,:], h, Wx, Wh, b) # NxTxH
+            elif self.cell_type == 'lstm':
+                h, c, _ = lstm_step_forward(x[:,0,:], h, c, Wx, Wh, b)
+            out, _ = temporal_affine_forward(h[:,np.newaxis,:], W_vocab, b_vocab)
+            captions[:,t] = np.squeeze(np.argmax(out, axis=2))
+        
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
